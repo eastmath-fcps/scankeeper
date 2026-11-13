@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+	<meta name="theme-color" content="#0f172a">
+	<meta name="color-scheme" content="dark">
+	<meta name="description" content="A simple, on-device barcode and QR code log for inventory.">
+	<title>ScanKeeper</title>
+	<link rel="icon" href="icon.svg" type="image/svg+xml">
+	<link rel="stylesheet" href="style.css">
+	<script src="vendor/html5-qrcode.min.js" defer></script>
+	<script src="script.js" defer></script>
+</head>
+
+<body>
+	<svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+		<symbol id="i-scan" viewBox="0 0 24 24">
+			<path d="M8 3H4a1 1 0 0 0-1 1v4m13-5h4a1 1 0 0 1 1 1v4M3 16v4a1 1 0 0 0 1 1h4m8 0h4a1 1 0 0 0 1-1v-4M7 8v8m4-8v8m3-8v8m3-8v8" />
+		</symbol>
+		<symbol id="i-copy" viewBox="0 0 24 24">
+			<rect x="8" y="8" width="12" height="13" rx="2" />
+			<path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+		</symbol>
+		<symbol id="i-download" viewBox="0 0 24 24">
+			<path d="M12 3v12m-5-5 5 5 5-5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+		</symbol>
+		<symbol id="i-trash" viewBox="0 0 24 24">
+			<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
+		</symbol>
+		<symbol id="i-close" viewBox="0 0 24 24">
+			<path d="m6 6 12 12M6 18 18 6" />
+		</symbol>
+		<symbol id="i-flash" viewBox="0 0 24 24">
+			<path d="m13 2-9 12h7l-1 8 10-13h-8z" />
+		</symbol>
+		<symbol id="i-check" viewBox="0 0 24 24">
+			<path d="m5 12 4 4L19 6" />
+		</symbol>
+	</svg>
+
+	<main class="app">
+		<header class="app-header">
+			<div class="brand-icon"><svg class="icon" aria-hidden="true">
+					<use href="#i-scan" />
+				</svg></div>
+			<div class="brand">
+				<h1>ScanKeeper</h1>
+				<p>keep a local log of scans</p>
+			</div>
+			<span class="version">v1.0.1</span>
+		</header>
+
+		<section class="log-card" aria-labelledby="log-label">
+			<div class="log-heading"><label id="log-label" for="scan-log">Scan log</label><span id="scan-count" class="count">0 scans</span></div>
+			<div class="log-field">
+				<textarea id="scan-log" aria-describedby="log-hint" placeholder="Your scans will appear here.&#10;One scan per line." spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off"></textarea>
+			</div>
+			<div class="log-options"><span id="log-hint">Tap the log to edit.</span><label class="toggle-label"><input id="skip-duplicates" type="checkbox" checked><span class="toggle" aria-hidden="true"></span>Skip duplicates</label></div>
+		</section>
+
+		<div class="utilities" role="group" aria-label="Log actions">
+			<button id="copy-button" type="button" disabled><svg class="icon" aria-hidden="true">
+					<use href="#i-copy" />
+				</svg><span>Copy all</span></button>
+			<button id="download-button" type="button" disabled><svg class="icon" aria-hidden="true">
+					<use href="#i-download" />
+				</svg><span>Save .txt</span></button>
+			<button id="clear-button" class="clear-button" type="button" disabled><svg class="icon" aria-hidden="true">
+					<use href="#i-trash" />
+				</svg><span>Clear</span></button>
+		</div>
+
+		<button id="scan-button" class="primary scan-button" type="button"><svg class="icon" aria-hidden="true">
+				<use href="#i-scan" />
+			</svg>Scan a code</button>
+		<p id="storage-status" class="storage-status" role="status">Saved on this device only.</p>
+		<div id="notice" class="notice" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+		<noscript>
+			<p class="noscript">Enable JavaScript to scan and save tags.</p>
+		</noscript>
+	</main>
+
+	<dialog id="scanner-dialog" class="scanner-dialog" aria-labelledby="scanner-title" aria-describedby="scanner-hint">
+		<div class="scanner-shell">
+			<header class="scanner-header">
+				<div>
+					<p class="eyebrow">SCANKEEPER</p>
+					<h2 id="scanner-title">Scan your tags</h2>
+				</div><button id="close-scanner" class="icon-button" type="button" aria-label="Close scanner" autofocus><svg class="icon" aria-hidden="true">
+						<use href="#i-close" />
+					</svg></button>
+			</header>
+			<div class="camera-tools">
+				<label class="camera-picker" for="camera-select"><span class="sr-only">Camera</span><select id="camera-select" disabled>
+						<option>Back camera</option>
+					</select></label>
+				<button id="torch-button" class="torch-button" type="button" aria-pressed="false" hidden><svg class="icon" aria-hidden="true">
+						<use href="#i-flash" />
+					</svg>Light</button>
+			</div>
+			<div id="camera-stage" class="camera-stage">
+				<div id="reader"></div>
+				<div id="camera-message" class="camera-message" role="status">
+					<div class="camera-glyph"><svg class="icon" aria-hidden="true">
+							<use href="#i-scan" />
+						</svg></div>
+					<p id="camera-message-text">Starting camera…</p><button id="retry-camera" type="button" hidden>Try again</button>
+				</div>
+			</div>
+			<p id="scanner-hint" class="scanner-hint">Keep the whole code in view. Scans are added automatically.</p>
+			<div id="scan-feedback" class="scan-feedback" role="status" aria-live="polite" aria-atomic="true">
+				<div class="feedback-top"><span id="feedback-label">Ready for your first tag</span><span id="scanner-count">0 scans</span></div>
+				<p id="last-scan">Point at a barcode or QR code</p>
+			</div>
+			<button id="done-scanning" class="primary" type="button"><svg class="icon" aria-hidden="true">
+					<use href="#i-check" />
+				</svg>Done scanning</button>
+			<p id="scanner-storage" class="scanner-storage" role="status" hidden>Couldn’t save on this device. Save your log when finished.</p>
+		</div>
+	</dialog>
+
+	<dialog id="clear-dialog" class="confirm-dialog" aria-labelledby="clear-title" aria-describedby="clear-description">
+		<h2 id="clear-title">Clear your scan log?</h2>
+		<p id="clear-description">Copy or save your log first. This removes all scans from this device.</p>
+		<div class="confirm-actions"><button id="cancel-clear" type="button" autofocus>Keep log</button><button id="confirm-clear" class="danger" type="button">Clear log</button></div>
+	</dialog>
+</body>
+
+</html>
