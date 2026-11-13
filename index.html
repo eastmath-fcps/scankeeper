@@ -49,7 +49,7 @@
 				<h1>ScanKeeper</h1>
 				<p>keep a local log of scans</p>
 			</div>
-			<span class="version">v1.0.1</span>
+			<span class="version">v1.1.0</span>
 		</header>
 
 		<section class="log-card" aria-labelledby="log-label">
@@ -101,7 +101,8 @@
 					</svg>Light</button>
 			</div>
 			<div id="camera-stage" class="camera-stage">
-				<div id="reader"></div>
+				<video id="camera-preview" autoplay muted playsinline aria-label="Live camera preview"></video>
+				<canvas id="scan-snapshot" aria-label="Captured image being analyzed" hidden></canvas>
 				<div id="camera-message" class="camera-message" role="status">
 					<div class="camera-glyph"><svg class="icon" aria-hidden="true">
 							<use href="#i-scan" />
@@ -109,15 +110,21 @@
 					<p id="camera-message-text">Starting camera…</p><button id="retry-camera" type="button" hidden>Try again</button>
 				</div>
 			</div>
-			<p id="scanner-hint" class="scanner-hint">Keep the whole code in view. Scans are added automatically.</p>
+			<p id="scanner-hint" class="scanner-hint">Keep one whole code in view, hold steady, then tap Scan.</p>
 			<div id="scan-feedback" class="scan-feedback" role="status" aria-live="polite" aria-atomic="true">
-				<div class="feedback-top"><span id="feedback-label">Ready for your first tag</span><span id="scanner-count">0 scans</span></div>
-				<p id="last-scan">Point at a barcode or QR code</p>
+				<div class="feedback-top"><span id="feedback-label">Ready when you are</span><span id="scanner-count">0 scans</span></div>
+				<p id="last-scan">Line up a code, then tap Scan</p>
 			</div>
-			<button id="done-scanning" class="primary" type="button"><svg class="icon" aria-hidden="true">
-					<use href="#i-check" />
-				</svg>Done scanning</button>
+			<div class="scanner-actions">
+				<button id="done-scanning" type="button"><svg class="icon" aria-hidden="true">
+						<use href="#i-check" />
+					</svg>Done</button>
+				<button id="capture-button" class="primary" type="button" aria-describedby="scanner-hint" disabled><svg class="icon" aria-hidden="true">
+						<use href="#i-scan" />
+					</svg><span id="capture-label">Scan</span></button>
+			</div>
 			<p id="scanner-storage" class="scanner-storage" role="status" hidden>Couldn’t save on this device. Save your log when finished.</p>
+			<div id="reader" hidden aria-hidden="true"></div>
 		</div>
 	</dialog>
 

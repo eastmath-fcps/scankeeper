@@ -511,14 +511,32 @@ select:disabled {
 	border: 1px solid var(--border);
 }
 
-#reader {
-	flex-shrink: 0;
-	padding: 0 !important;
-	border: 0 !important;
+#camera-preview,
+#scan-snapshot {
+	position: absolute;
+	inset: 0;
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
 }
 
-#reader video {
-	display: block;
+#scan-snapshot {
+	background: var(--camera-background);
+}
+
+.scanner-actions {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+	gap: 10px;
+	flex-shrink: 0;
+}
+
+#done-scanning {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
 }
 
 .camera-message {
@@ -603,7 +621,8 @@ select:disabled {
 	color: var(--accent-text);
 }
 
-.scan-feedback[data-kind="duplicate"] #feedback-label {
+.scan-feedback[data-kind="duplicate"] #feedback-label,
+.scan-feedback[data-kind="warning"] #feedback-label {
 	color: var(--warning);
 }
 
@@ -795,7 +814,7 @@ select:disabled {
 	.scanner-header,
 	.camera-tools,
 	.scan-feedback,
-	#done-scanning {
+	.scanner-actions {
 		grid-column: 2;
 	}
 

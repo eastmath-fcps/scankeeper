@@ -8,21 +8,24 @@
 	const clearDialog = $("clear-dialog");
 	const cameraSelect = $("camera-select");
 	const torchButton = $("torch-button");
+	const preview = $("camera-preview");
+	const snapshot = $("scan-snapshot");
+	const captureButton = $("capture-button");
 	const projectPath = location.pathname.replace(/index\.html$/, "").replace(/\/?$/, "/");
 	const storageKey = `scankeeper:v1:${projectPath}`;
 	let values = new Set();
 	let storageSaved = true;
 	let noticeTimer;
-	let scanner = null;
+	let cameraStream = null;
+	let decoder = null;
 	let running = false;
+	let cameraStarting = false;
+	let captureBusy = false;
+	let torchBusy = false;
 	let torchOn = false;
 	let selectedCamera = null;
 	let generation = 0;
 	let cameraQueue = Promise.resolve();
-	let lastDetected = null;
-	let lastDetectedAt = 0;
-	let resizeTimer;
-	let readerWidth = 0;
 
 	function announce(message) {
 		clearTimeout(noticeTimer);
@@ -88,12 +91,10 @@
 	}
 
 	function acceptScan(decodedText) {
-		if (typeof decodedText !== "string" || !decodedText.trim()) return;
-		const now = performance.now();
-		const sameVisibleCode = decodedText === lastDetected && now - lastDetectedAt < 1600;
-		lastDetected = decodedText;
-		lastDetectedAt = now;
-		if (sameVisibleCode) return;
+		if (typeof decodedText !== "string" || !decodedText.trim()) {
+			feedback("No readable value found", "Hold steady and tap Scan again", "warning");
+			return;
+		}
 		const value = oneLine(decodedText);
 		if (skipDuplicates.checked && values.has(value)) {
 			feedback("Already in your log · skipped", value, "duplicate");
@@ -128,42 +129,50 @@
 		return "Couldn’t start the camera. Check camera permission and try again in Safari or Chrome. You can also type tags into the log.";
 	}
 
-	async function releaseCamera() {
+	function frameReady() {
+		const track = cameraStream?.getVideoTracks()[0];
+		return running && track?.readyState === "live" && !track.muted
+			&& !preview.paused && preview.readyState >= 2
+			&& preview.videoWidth > 0 && preview.videoHeight > 0;
+	}
+
+	function updateCameraControls() {
+		captureButton.disabled = !frameReady() || captureBusy || torchBusy;
+		captureButton.setAttribute("aria-busy", String(captureBusy));
+		$("capture-label").textContent = captureBusy ? "Analyzing…" : "Scan";
+		cameraSelect.disabled = cameraStarting || captureBusy || cameraSelect.options.length < 2;
+		torchButton.disabled = !running || captureBusy || torchBusy;
+	}
+
+	function releaseCamera() {
 		running = false;
-		const instance = scanner;
-		scanner = null;
-		const tracks = Array.from($("reader").querySelectorAll("video"))
-			.flatMap((video) => video.srcObject?.getTracks?.() || []);
-		try {
-			if (instance?.isScanning) await instance.stop();
-		} catch (_) {
-		} finally {
-			tracks.forEach((track) => track.stop());
-			try { instance?.clear(); } catch (_) { /* A failed start can already be clear. */ }
-			$("reader").replaceChildren();
-		}
+		const stream = cameraStream;
+		cameraStream = null;
+		stream?.getTracks().forEach((track) => track.stop());
+		preview.pause();
+		preview.srcObject = null;
+		snapshot.hidden = true;
 		torchOn = false;
 		torchButton.setAttribute("aria-pressed", "false");
 		torchButton.hidden = true;
+		updateCameraControls();
 	}
 
 	function queueCamera(work) {
-		cameraQueue = cameraQueue.then(work).catch(async () => {
-			await releaseCamera();
-			if (scannerDialog.open) showCameraMessage("The camera stopped unexpectedly. Try again.", true);
+		const token = generation;
+		cameraQueue = cameraQueue.then(work).catch(() => {
+			if (token !== generation) return;
+			cameraStarting = false;
+			releaseCamera();
+			if (current(token)) showCameraMessage("The camera stopped unexpectedly. Try again.", true);
 		});
 	}
 
-	function fittedReaderWidth() {
-		const stage = $("camera-stage");
-		return Math.max(1, Math.floor(Math.min(stage.clientWidth - 2, (stage.clientHeight - 2) * 4 / 3)));
-	}
-
-	async function populateCameras(token, instance) {
+	async function populateCameras(token, stream) {
 		try {
 			const cameras = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === "videoinput");
-			if (!current(token) || scanner !== instance) return;
-			const activeId = instance.getRunningTrackSettings().deviceId;
+			if (!current(token) || cameraStream !== stream) return;
+			const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId;
 			if (cameras.length) {
 				cameraSelect.replaceChildren(...cameras.map((camera, index) => new Option(camera.label || `Camera ${index + 1}`, camera.deviceId)));
 				if (cameras.some((camera) => camera.deviceId === activeId)) {
@@ -171,64 +180,110 @@
 					selectedCamera = activeId;
 				}
 			}
-			cameraSelect.disabled = cameras.length < 2;
-		} catch (_) { cameraSelect.disabled = true; }
+		} catch (_) { /* Preview and capture can work without a camera list. */ }
+		if (current(token)) updateCameraControls();
 	}
 
 	function startCamera() {
 		const token = ++generation;
-		running = false;
-		cameraSelect.disabled = true;
-		torchButton.hidden = true;
+		cameraStarting = true;
+		releaseCamera();
 		showCameraMessage("Starting camera… Allow access when your browser asks.");
 		queueCamera(async () => {
 			if (!current(token)) return;
-			await releaseCamera();
-			if (!current(token)) return;
-			if (!window.isSecureContext) {
-				showCameraMessage("Camera scanning requires HTTPS. Open the secure GitHub Pages address, or use localhost for testing.");
-				return;
-			}
-			if (!navigator.mediaDevices?.getUserMedia) {
-				showCameraMessage("This browser cannot access a camera. Open this page directly in Safari or Chrome, or enter tags in the log.");
-				return;
-			}
-			if (typeof window.Html5Qrcode !== "function") {
-				showCameraMessage("The scanner couldn’t load. Refresh the page and try again.");
-				return;
-			}
-			readerWidth = fittedReaderWidth();
-			$("reader").style.width = `${readerWidth}px`;
+			let stream;
 			try {
-				const instance = new Html5Qrcode("reader", { verbose: false });
-				scanner = instance;
-				await instance.start(selectedCamera || { facingMode: "environment" },
-					{ fps: 10, aspectRatio: 4 / 3 },
-					(text) => { if (current(token) && running) acceptScan(text); },
-					() => { /* An undecodable frame is normal while aiming. */ });
-				if (!current(token)) { await releaseCamera(); return; }
+				if (!window.isSecureContext) {
+					showCameraMessage("Camera scanning requires HTTPS. Open the secure GitHub Pages address, or use localhost for testing.");
+					return;
+				}
+				if (!navigator.mediaDevices?.getUserMedia) {
+					showCameraMessage("This browser cannot access a camera. Open this page directly in Safari or Chrome, or enter tags in the log.");
+					return;
+				}
+				if (typeof window.Html5Qrcode !== "function") {
+					showCameraMessage("The scanner couldn’t load. Refresh the page and try again.");
+					return;
+				}
+				stream = await navigator.mediaDevices.getUserMedia({
+					audio: false,
+					video: {
+						...(selectedCamera ? { deviceId: { exact: selectedCamera } } : { facingMode: { ideal: "environment" } }),
+						width: { ideal: 1920 },
+						height: { ideal: 1440 }
+					}
+				});
+				if (!current(token)) { stream.getTracks().forEach((track) => track.stop()); return; }
+				cameraStream = stream;
+				preview.srcObject = stream;
+				await preview.play();
+				if (!current(token) || cameraStream !== stream) { stream.getTracks().forEach((track) => track.stop()); return; }
 				running = true;
 				$("camera-message").hidden = true;
+				const track = stream.getVideoTracks()[0];
 				try {
-					const capabilities = instance.getRunningTrackCapabilities();
-					torchButton.hidden = capabilities.torch !== true;
+					torchButton.hidden = track.getCapabilities?.().torch !== true;
 				} catch (_) { torchButton.hidden = true; }
-				await populateCameras(token, instance);
+				track.addEventListener("ended", () => {
+					if (!current(token) || cameraStream !== stream) return;
+					releaseCamera();
+					showCameraMessage("The camera stopped. Try again.", true);
+				});
+				track.addEventListener("mute", updateCameraControls);
+				track.addEventListener("unmute", updateCameraControls);
+				void populateCameras(token, stream);
 			} catch (error) {
-				await releaseCamera();
+				stream?.getTracks().forEach((track) => track.stop());
 				if (current(token)) {
+					releaseCamera();
 					showCameraMessage(cameraError(error), true);
-					cameraSelect.disabled = cameraSelect.options.length < 2;
 				}
+			} finally {
+				if (current(token)) { cameraStarting = false; updateCameraControls(); }
 			}
 		});
 	}
 
+	async function captureScan() {
+		if (!current(generation) || !frameReady() || captureBusy || torchBusy) return;
+		const token = generation;
+		const stream = cameraStream;
+		captureBusy = true;
+		updateCameraControls();
+		feedback("Analyzing captured image…", "One moment…", "ready");
+		let decoding = false;
+		try {
+			snapshot.width = preview.videoWidth;
+			snapshot.height = preview.videoHeight;
+			const context = snapshot.getContext("2d");
+			if (!context) throw new Error("Could not create a captured image");
+			context.drawImage(preview, 0, 0, snapshot.width, snapshot.height);
+			snapshot.hidden = false;
+			const blob = await new Promise((resolve, reject) => snapshot.toBlob(
+				(image) => image ? resolve(image) : reject(new Error("Could not capture image")), "image/png"));
+			if (!current(token) || cameraStream !== stream) return;
+			decoder ||= new Html5Qrcode("reader", { verbose: false });
+			decoding = true;
+			const text = await decoder.scanFile(new File([blob], "scan.png", { type: "image/png" }), false);
+			if (current(token) && cameraStream === stream) acceptScan(text);
+		} catch (_) {
+			if (current(token) && cameraStream === stream) {
+				feedback(decoding ? "No barcode found · nothing added" : "Couldn’t capture image · nothing added",
+					"Hold steady and tap Scan again", "warning");
+			}
+		} finally {
+			try { decoder?.clear(); } catch (_) { /* The next scan can recreate the canvas. */ }
+			snapshot.hidden = true;
+			snapshot.width = snapshot.height = 1;
+			captureBusy = false;
+			updateCameraControls();
+		}
+	}
+
 	function stopCameraSession() {
 		++generation;
-		running = false;
-		clearTimeout(resizeTimer);
-		queueCamera(releaseCamera);
+		cameraStarting = false;
+		releaseCamera();
 	}
 
 	function closeScanner() {
@@ -239,8 +294,7 @@
 	$("scan-button").addEventListener("click", () => {
 		log.blur();
 		$("notice").hidden = true;
-		lastDetected = null;
-		feedback("Ready for your next tag", "Point at a barcode or QR code", "ready");
+		feedback("Ready when you are", "Line up a code, then tap Scan", "ready");
 		scannerDialog.showModal();
 		startCamera();
 	});
@@ -249,21 +303,27 @@
 	scannerDialog.addEventListener("cancel", (event) => { event.preventDefault(); closeScanner(); });
 	scannerDialog.addEventListener("close", () => { if (!scannerDialog.open) stopCameraSession(); });
 	$("retry-camera").addEventListener("click", startCamera);
+	captureButton.addEventListener("click", captureScan);
+	for (const event of ["loadeddata", "canplay", "playing", "pause", "emptied", "resize"]) {
+		preview.addEventListener(event, updateCameraControls);
+	}
 	cameraSelect.addEventListener("change", () => { selectedCamera = cameraSelect.value; startCamera(); });
 	torchButton.addEventListener("click", () => {
+		if (!running || captureBusy || torchBusy) return;
 		const token = generation;
-		torchButton.disabled = true;
+		torchBusy = true;
+		updateCameraControls();
 		queueCamera(async () => {
 			try {
-				if (!current(token) || !running || !scanner) return;
+				if (!current(token) || !running || !cameraStream) return;
 				const next = !torchOn;
-				await scanner.applyVideoConstraints({ advanced: [{ torch: next }] });
+				await cameraStream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: next }] });
 				if (!current(token)) return;
 				torchOn = next;
 				torchButton.setAttribute("aria-pressed", String(torchOn));
 			} catch (_) {
 				if (current(token)) feedback("Light isn’t available on this camera", "Try moving to a brighter area", "ready");
-			} finally { torchButton.disabled = false; }
+			} finally { torchBusy = false; updateCameraControls(); }
 		});
 	});
 
@@ -333,7 +393,6 @@
 	});
 	window.addEventListener("pagehide", () => {
 		closeScanner();
-		$("reader").querySelectorAll("video").forEach((video) => video.srcObject?.getTracks?.().forEach((track) => track.stop()));
 	});
 	window.addEventListener("beforeunload", (event) => {
 		if (!storageSaved && log.value) { event.preventDefault(); event.returnValue = ""; }
@@ -352,14 +411,7 @@
 	window.visualViewport?.addEventListener("resize", fitViewport);
 	window.visualViewport?.addEventListener("scroll", fitViewport);
 	window.addEventListener("resize", fitViewport);
-	const stageObserver = new ResizeObserver(() => {
-		clearTimeout(resizeTimer);
-		resizeTimer = setTimeout(() => {
-			if (scannerDialog.open && running && Math.abs(fittedReaderWidth() - readerWidth) > 24) startCamera();
-		}, 350);
-	});
-	stageObserver.observe($("camera-stage"));
-
 	fitViewport();
+	updateCameraControls();
 	restoreLog();
 })();
